@@ -1,2 +1,3 @@
-# unidad2_etl_biblioteca
-Proyecto ETL de préstamos de biblioteca utilizando Python, Pandas y MySQL.
+# Unidad 2 - ETL Biblioteca
+
+Proyecto de ETL utilizando Python, Pandas y MySQL.
