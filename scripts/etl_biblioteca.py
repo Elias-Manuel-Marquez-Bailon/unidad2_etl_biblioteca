@@ -169,23 +169,169 @@ def limpiar_tablas(engine):
 
 
 def cargar_dimensiones(engine, df):
-    pass
+    dim_alumno = df[["alumno"]].drop_duplicates()
+    dim_carrera = df[["carrera"]].drop_duplicates()
+    dim_libro = df[["libro", "categoria"]].drop_duplicates()
+    dim_sede = df[["sede"]].drop_duplicates()
+    dim_fecha = df[["fecha_prestamo"]].drop_duplicates().copy()
+    dim_fecha.columns = ["fecha"]
+    dim_fecha["anio"] = dim_fecha["fecha"].dt.year
+    dim_fecha["mes"] = dim_fecha["fecha"].dt.month
+    dim_fecha["dia"] = dim_fecha["fecha"].dt.day
+    dim_fecha["id_fecha"] = dim_fecha["fecha"].dt.strftime("%Y%m%d").astype(int)
+
+    with engine.connect() as conn:
+        for _, fila in dim_alumno.iterrows():
+            conn.execute(
+                text("INSERT IGNORE INTO dim_alumno (alumno) VALUES (:alumno)"),
+                {"alumno": fila["alumno"]}
+            )
+        for _, fila in dim_carrera.iterrows():
+            conn.execute(
+                text("INSERT IGNORE INTO dim_carrera (carrera) VALUES (:carrera)"),
+                {"carrera": fila["carrera"]}
+            )
+        for _, fila in dim_libro.iterrows():
+            conn.execute(
+                text("INSERT IGNORE INTO dim_libro (libro, categoria) VALUES (:libro, :categoria)"),
+                {"libro": fila["libro"], "categoria": fila["categoria"]}
+            )
+        for _, fila in dim_sede.iterrows():
+            conn.execute(
+                text("INSERT IGNORE INTO dim_sede (sede) VALUES (:sede)"),
+                {"sede": fila["sede"]}
+            )
+        for _, fila in dim_fecha.iterrows():
+            conn.execute(
+                text("INSERT IGNORE INTO dim_fecha (id_fecha, fecha, anio, mes, dia) VALUES (:id, :fecha, :anio, :mes, :dia)"),
+                {
+                    "id": int(fila["id_fecha"]),
+                    "fecha": fila["fecha"].date(),
+                    "anio": int(fila["anio"]),
+                    "mes": int(fila["mes"]),
+                    "dia": int(fila["dia"])
+                }
+            )
+        conn.commit()
 
 
-def cargar_hechos(engine, df):
-    pass
+def cargar_hechos(engine, df_validos):
+    with engine.connect() as conn:
+        dim_alumno_sql = pd.read_sql("SELECT id_alumno, alumno FROM dim_alumno", conn)
+        dim_carrera_sql = pd.read_sql("SELECT id_carrera, carrera FROM dim_carrera", conn)
+        dim_libro_sql = pd.read_sql("SELECT id_libro, libro, categoria FROM dim_libro", conn)
+        dim_sede_sql = pd.read_sql("SELECT id_sede, sede FROM dim_sede", conn)
+
+    dic_alumno = dict(zip(dim_alumno_sql["alumno"], dim_alumno_sql["id_alumno"]))
+    dic_carrera = dict(zip(dim_carrera_sql["carrera"], dim_carrera_sql["id_carrera"]))
+    dic_libro = dict(zip(zip(dim_libro_sql["libro"], dim_libro_sql["categoria"]), dim_libro_sql["id_libro"]))
+    dic_sede = dict(zip(dim_sede_sql["sede"], dim_sede_sql["id_sede"]))
+
+    df = df_validos.copy()
+    df["id_alumno"] = df["alumno"].map(dic_alumno)
+    df["id_carrera"] = df["carrera"].map(dic_carrera)
+    df["id_libro"] = df[["libro", "categoria"]].apply(tuple, axis=1).map(dic_libro)
+    df["id_sede"] = df["sede"].map(dic_sede)
+    df["id_fecha"] = df["fecha_prestamo"].dt.strftime("%Y%m%d").astype(int)
+
+    fact_prestamos = df[[
+        "id_prestamo", "id_fecha", "id_alumno", "id_carrera",
+        "id_libro", "id_sede", "dias_prestamo", "multa_diaria", "total_multa"
+    ]]
+
+    with engine.connect() as conn:
+        for _, fila in fact_prestamos.iterrows():
+            conn.execute(
+                text("""INSERT INTO fact_prestamos
+                    (id_prestamo, id_fecha, id_alumno, id_carrera, id_libro, id_sede, dias_prestamo, multa_diaria, total_multa)
+                    VALUES (:p, :f, :a, :c, :l, :s, :d, :m, :t)"""),
+                {
+                    "p": int(fila["id_prestamo"]),
+                    "f": int(fila["id_fecha"]),
+                    "a": int(fila["id_alumno"]),
+                    "c": int(fila["id_carrera"]),
+                    "l": int(fila["id_libro"]),
+                    "s": int(fila["id_sede"]),
+                    "d": int(fila["dias_prestamo"]),
+                    "m": float(fila["multa_diaria"]),
+                    "t": float(fila["total_multa"])
+                }
+            )
+        conn.commit()
 
 
 def registrar_errores(engine, errores):
-    pass
+    with engine.connect() as conn:
+        for e in errores:
+            conn.execute(
+                text("""INSERT INTO etl_errores
+                    (fecha_error, archivo_origen, fila_csv, id_registro, descripcion_error, datos_originales)
+                    VALUES (:fecha, :archivo, :fila, :id_reg, :desc, :datos)"""),
+                {
+                    "fecha": e["fecha_error"],
+                    "archivo": e["archivo_origen"],
+                    "fila": e["fila_csv"],
+                    "id_reg": int(e["id_registro"]) if pd.notna(e["id_registro"]) else None,
+                    "desc": e["descripcion_error"],
+                    "datos": e["datos_originales"]
+                }
+            )
+        conn.commit()
 
 
 def registrar_log(engine, resumen):
-    pass
+    with engine.connect() as conn:
+        conn.execute(
+            text("""INSERT INTO etl_log
+                (fecha_ejecucion, archivo_origen, filas_leidas, filas_cargadas, filas_rechazadas, estado)
+                VALUES (:fecha, :archivo, :leidas, :cargadas, :rechazadas, :estado)"""),
+            {
+                "fecha": resumen["fecha_ejecucion"],
+                "archivo": resumen["archivo_origen"],
+                "leidas": resumen["filas_leidas"],
+                "cargadas": resumen["filas_cargadas"],
+                "rechazadas": resumen["filas_rechazadas"],
+                "estado": resumen["estado"]
+            }
+        )
+        conn.commit()
 
 
-def generar_reporte(resumen):
-    pass
+def generar_reporte(resumen, errores):
+    ruta_reporte = os.path.join("evidencias", "reporte_ejecucion.txt")
+    os.makedirs("evidencias", exist_ok=True)
+
+    lineas = []
+    lineas.append("=" * 55)
+    lineas.append("    REPORTE DE EJECUCION - ETL BIBLIOTECA")
+    lineas.append("=" * 55)
+    lineas.append("")
+    lineas.append(f"Nombre del alumno: (pendiente)")
+    lineas.append(f"Fecha y hora de ejecucion: {resumen['fecha_ejecucion']}")
+    lineas.append(f"Archivo procesado: {resumen['archivo_origen']}")
+    lineas.append("")
+    lineas.append("-" * 55)
+    lineas.append("RESULTADOS")
+    lineas.append("-" * 55)
+    lineas.append(f"Filas leidas:      {resumen['filas_leidas']}")
+    lineas.append(f"Filas cargadas:    {resumen['filas_cargadas']}")
+    lineas.append(f"Filas rechazadas:  {resumen['filas_rechazadas']}")
+    lineas.append(f"Estado final:      {resumen['estado']}")
+    lineas.append("")
+    lineas.append("-" * 55)
+    lineas.append("ERRORES DETECTADOS")
+    lineas.append("-" * 55)
+    for e in errores:
+        lineas.append(f"  Fila CSV {e['fila_csv']}: {e['descripcion_error']} (id: {e['id_registro']})")
+    lineas.append("")
+    lineas.append("=" * 55)
+    lineas.append("FIN DEL REPORTE")
+    lineas.append("=" * 55)
+
+    with open(ruta_reporte, "w", encoding="utf-8") as f:
+        f.write("\n".join(lineas))
+
+    return ruta_reporte
 
 
 def main():
@@ -249,6 +395,51 @@ def main():
     print(f"\n--- ERRORES DETECTADOS ({len(errores)}) ---")
     for e in errores:
         print(f"  Fila CSV {e['fila_csv']}: {e['descripcion_error']} (id: {e['id_registro']})")
+
+    print("\n" + "=" * 60)
+    print("FASE 7 - CARGA DEL DATA WAREHOUSE")
+    print("=" * 60)
+
+    cargar_dimensiones(engine, df_validos)
+    print(f"[OK] Dimensiones cargadas")
+
+    cargar_hechos(engine, df_validos)
+    print(f"[OK] {total_cargadas} registros cargados en fact_prestamos")
+
+    registrar_errores(engine, errores)
+    print(f"[OK] {total_rechazadas} errores registrados en etl_errores")
+
+    if total_rechazadas == 0 and total_cargadas > 0:
+        estado = "FINALIZADO"
+    elif total_rechazadas > 0 and total_cargadas > 0:
+        estado = "FINALIZADO_CON_ERRORES"
+    else:
+        estado = "ERROR_GENERAL"
+
+    resumen = {
+        "fecha_ejecucion": datetime.now(),
+        "archivo_origen": archivo,
+        "filas_leidas": total_leidas,
+        "filas_cargadas": total_cargadas,
+        "filas_rechazadas": total_rechazadas,
+        "estado": estado
+    }
+
+    registrar_log(engine, resumen)
+    print(f"[OK] Registro guardado en etl_log (Estado: {estado})")
+
+    ruta_reporte = generar_reporte(resumen, errores)
+    print(f"[OK] Reporte generado: {ruta_reporte}")
+
+    print("\n" + "=" * 60)
+    print("ETL FINALIZADO")
+    print("=" * 60)
+    print(f"\nResumen:")
+    print(f"  Archivo:         {archivo}")
+    print(f"  Filas leidas:    {total_leidas}")
+    print(f"  Filas cargadas:  {total_cargadas}")
+    print(f"  Filas rechazadas:{total_rechazadas}")
+    print(f"  Estado:          {estado}")
 
 
 if __name__ == "__main__":
