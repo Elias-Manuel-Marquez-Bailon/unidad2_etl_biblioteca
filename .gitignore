@@ -206,6 +206,9 @@ tempCodeRunnerFile.py
 # Ruff stuff:
 .ruff_cache/
 
+# Archivos personales de instrucciones
+PROMPT_CONTINUACION_ETL.md
+
 # PyPI configuration file
 .pypirc
 
