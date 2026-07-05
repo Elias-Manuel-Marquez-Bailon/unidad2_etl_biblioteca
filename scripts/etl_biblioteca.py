@@ -47,8 +47,44 @@ def limpiar_datos(df):
     return df
 
 
-def validar_datos(df):
-    pass
+def validar_datos(df, archivo_origen):
+    errores = []
+    validos = []
+    ids_vistos = set()
+
+    for i, fila in df.iterrows():
+        id_prestamo = fila["id_prestamo"]
+        datos_str = ",".join(str(fila[col]) for col in df.columns)
+        fila_csv = i + 2
+
+        total_esperado = fila["dias_prestamo"] * fila["multa_diaria"]
+        if fila["total_multa"] != total_esperado:
+            errores.append({
+                "fecha_error": datetime.now(),
+                "archivo_origen": archivo_origen,
+                "fila_csv": fila_csv,
+                "id_registro": id_prestamo,
+                "descripcion_error": "total_multa incorrecto",
+                "datos_originales": datos_str
+            })
+            continue
+
+        if id_prestamo in ids_vistos:
+            errores.append({
+                "fecha_error": datetime.now(),
+                "archivo_origen": archivo_origen,
+                "fila_csv": fila_csv,
+                "id_registro": id_prestamo,
+                "descripcion_error": "id_prestamo duplicado",
+                "datos_originales": datos_str
+            })
+            continue
+
+        ids_vistos.add(id_prestamo)
+        validos.append(fila)
+
+    df_validos = pd.DataFrame(validos)
+    return df_validos, errores
 
 
 def crear_tablas(engine):
@@ -194,6 +230,25 @@ def main():
         resultado = conn.execute(text("SHOW TABLES"))
         tablas = [fila[0] for fila in resultado]
         print(f"\nTablas en biblioteca_dw: {tablas}")
+
+    print("\n" + "=" * 60)
+    print("FASE 6 - VALIDACIONES DEL ETL")
+    print("=" * 60)
+
+    archivo = os.path.basename(ruta_csv)
+    df_validos, errores = validar_datos(df_limpio, archivo)
+
+    total_leidas = len(df_limpio)
+    total_cargadas = len(df_validos)
+    total_rechazadas = len(errores)
+
+    print(f"\nFilas leidas: {total_leidas}")
+    print(f"Filas cargadas: {total_cargadas}")
+    print(f"Filas rechazadas: {total_rechazadas}")
+
+    print(f"\n--- ERRORES DETECTADOS ({len(errores)}) ---")
+    for e in errores:
+        print(f"  Fila CSV {e['fila_csv']}: {e['descripcion_error']} (id: {e['id_registro']})")
 
 
 if __name__ == "__main__":
