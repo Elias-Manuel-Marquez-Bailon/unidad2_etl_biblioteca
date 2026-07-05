@@ -1,0 +1,25 @@
+=======================================================
+    REPORTE DE EJECUCION - ETL BIBLIOTECA
+=======================================================
+
+Nombre del alumno: (pendiente)
+Fecha y hora de ejecucion: 2026-07-05 09:14:12.082843
+Archivo procesado: prestamos_biblioteca_100.csv
+
+-------------------------------------------------------
+RESULTADOS
+-------------------------------------------------------
+Filas leidas:      100
+Filas cargadas:    98
+Filas rechazadas:  2
+Estado final:      FINALIZADO_CON_ERRORES
+
+-------------------------------------------------------
+ERRORES DETECTADOS
+-------------------------------------------------------
+  Fila CSV 100: total_multa incorrecto (id: 5099)
+  Fila CSV 101: id_prestamo duplicado (id: 5002)
+
+=======================================================
+FIN DEL REPORTE
+=======================================================
